@@ -1,24 +1,52 @@
 /**
  * Crypto Price Tracker - i18n, multi-API, watchlist, search add
+ * 容错 / 兼容 / 稳定 / 性能优化
  */
 
+const runtime = (typeof chrome !== 'undefined' && chrome?.runtime?.id) ? chrome : (typeof browser !== 'undefined' && browser?.runtime?.id) ? browser : null;
+
 function t(key, ...subs) {
-  return chrome.i18n.getMessage(key, subs) || key;
+  try {
+    return runtime?.i18n?.getMessage?.(key, subs) || key;
+  } catch {
+    return key;
+  }
 }
 
 function applyI18n() {
-  document.querySelectorAll('[data-i18n]').forEach((el) => {
-    el.textContent = t(el.dataset.i18n);
-  });
-  document.querySelectorAll('[data-i18n-title]').forEach((el) => {
-    el.title = t(el.dataset.i18nTitle);
-  });
-  const list = document.getElementById('list');
-  if (list) list.setAttribute('aria-label', t('listAriaLabel'));
-  const title = document.querySelector('title');
-  if (title) title.textContent = t('extName');
-  const searchInput = document.getElementById('addSearchInput');
-  if (searchInput) searchInput.placeholder = t('searchPlaceholder');
+  try {
+    document.querySelectorAll('[data-i18n]').forEach((el) => {
+      if (el?.dataset?.i18n) el.textContent = t(el.dataset.i18n);
+    });
+    document.querySelectorAll('[data-i18n-title]').forEach((el) => {
+      if (el?.dataset?.i18nTitle) el.title = t(el.dataset.i18nTitle);
+    });
+    const list = document.getElementById('list');
+    if (list) list.setAttribute('aria-label', t('listAriaLabel'));
+    const title = document.querySelector('title');
+    if (title) title.textContent = t('extName');
+    const searchInput = document.getElementById('addSearchInput');
+    if (searchInput) searchInput.placeholder = t('searchPlaceholder');
+  } catch (err) {
+    console.warn('applyI18n:', err);
+  }
+}
+
+function safeParseNum(v, def = null) {
+  if (v == null || v === '') return def;
+  const n = parseFloat(v);
+  return isNaN(n) ? def : n;
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  const str = String(s);
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 const COIN_POOL = [
@@ -59,12 +87,16 @@ const PRESETS = {
 };
 
 const REFRESH_INTERVAL_MS = 15000;
+const SEARCH_DEBOUNCE_MS = 150;
 const COINGECKO_URL = 'https://api.coingecko.com/api/v3/simple/price';
 const COINCAP_URL = 'https://api.coincap.io/v2/assets';
 const COIN_LIST_CACHE_KEY = 'crypto_tracker_coin_list';
 const SEARCH_RESULT_LIMIT = 20;
 
 let refreshTimerId = null;
+let loadAbort = false;
+let searchDebounceId = null;
+let searchableCoinsCache = null;
 let currentApi = 'coingecko';
 let displayList = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX'];
 let watchlist = ['BTC', 'ETH'];
@@ -79,8 +111,9 @@ const STORAGE_KEYS = {
 };
 
 function toDerivedCoin(raw) {
-  const sym = (raw.symbol || '').toUpperCase();
-  const low = (raw.symbol || '').toLowerCase();
+  if (!raw || !raw.id || !raw.symbol) return null;
+  const sym = String(raw.symbol).toUpperCase();
+  const low = String(raw.symbol).toLowerCase();
   return {
     id: raw.id,
     coinCapId: raw.id,
@@ -94,8 +127,8 @@ function toDerivedCoin(raw) {
 
 function getCOINS_BY_SYMBOL() {
   const map = {};
-  COIN_POOL.forEach((c) => { map[c.symbol] = c; });
-  Object.values(customCoins).forEach((c) => { map[c.symbol] = c; });
+  COIN_POOL.forEach((c) => { if (c?.symbol) map[c.symbol] = c; });
+  Object.values(customCoins).forEach((c) => { if (c?.symbol) map[c.symbol] = c; });
   return map;
 }
 
@@ -105,82 +138,134 @@ function getCoinsToFetch() {
 }
 
 function getSearchableCoins() {
+  if (searchableCoinsCache) return searchableCoinsCache;
   const bySym = {};
-  COIN_POOL.forEach((c) => { bySym[c.symbol] = c; });
-  Object.values(customCoins).forEach((c) => { bySym[c.symbol] = c; });
+  COIN_POOL.forEach((c) => { if (c?.symbol) bySym[c.symbol] = c; });
+  Object.values(customCoins).forEach((c) => { if (c?.symbol) bySym[c.symbol] = c; });
   coinListCache.forEach((c) => {
-    const sym = (c.symbol || '').toUpperCase();
-    if (!bySym[sym] && c.id && c.symbol) {
-      bySym[sym] = toDerivedCoin(c);
+    const sym = (c?.symbol || '').toUpperCase();
+    if (sym && !bySym[sym] && c?.id) {
+      const derived = toDerivedCoin(c);
+      if (derived) bySym[sym] = derived;
     }
   });
-  return Object.values(bySym);
+  searchableCoinsCache = Object.values(bySym);
+  return searchableCoinsCache;
+}
+
+function invalidateSearchCache() {
+  searchableCoinsCache = null;
+}
+
+async function safeStorageGet(keys) {
+  if (!runtime?.storage?.sync?.get) return {};
+  try {
+    return await runtime.storage.sync.get(keys) || {};
+  } catch {
+    return {};
+  }
+}
+
+async function safeStorageSet(obj) {
+  if (!runtime?.storage?.sync?.set) return;
+  try {
+    await runtime.storage.sync.set(obj);
+  } catch (err) {
+    console.warn('storage.set:', err);
+  }
+}
+
+async function safeStorageLocalGet(key) {
+  if (!runtime?.storage?.local?.get) return undefined;
+  try {
+    const r = await runtime.storage.local.get(key);
+    return r?.[key];
+  } catch {
+    return undefined;
+  }
+}
+
+async function safeStorageLocalSet(obj) {
+  if (!runtime?.storage?.local?.set) return;
+  try {
+    await runtime.storage.local.set(obj);
+  } catch (err) {
+    console.warn('storage.local.set:', err);
+  }
 }
 
 async function loadStorage() {
-  const r = await chrome.storage.sync.get([STORAGE_KEYS.api, STORAGE_KEYS.displayList, STORAGE_KEYS.watchlist, STORAGE_KEYS.customCoins]);
+  const r = await safeStorageGet([STORAGE_KEYS.api, STORAGE_KEYS.displayList, STORAGE_KEYS.watchlist, STORAGE_KEYS.customCoins]);
   if (r[STORAGE_KEYS.api]) currentApi = r[STORAGE_KEYS.api];
-  if (r[STORAGE_KEYS.displayList] && Array.isArray(r[STORAGE_KEYS.displayList]) && r[STORAGE_KEYS.displayList].length > 0) {
-    displayList = r[STORAGE_KEYS.displayList];
+  if (Array.isArray(r[STORAGE_KEYS.displayList]) && r[STORAGE_KEYS.displayList].length > 0) {
+    displayList = r[STORAGE_KEYS.displayList].filter((s) => typeof s === 'string');
   }
-  if (r[STORAGE_KEYS.watchlist] && Array.isArray(r[STORAGE_KEYS.watchlist])) watchlist = r[STORAGE_KEYS.watchlist];
-  if (r[STORAGE_KEYS.customCoins] && typeof r[STORAGE_KEYS.customCoins] === 'object') customCoins = r[STORAGE_KEYS.customCoins];
-  const local = await chrome.storage.local.get(COIN_LIST_CACHE_KEY);
-  const cached = local[COIN_LIST_CACHE_KEY];
-  coinListCache = (cached?.list || []).filter((c) => c?.id && c?.symbol && c?.name);
+  if (Array.isArray(r[STORAGE_KEYS.watchlist])) watchlist = r[STORAGE_KEYS.watchlist].filter((s) => typeof s === 'string');
+  if (r[STORAGE_KEYS.customCoins] && typeof r[STORAGE_KEYS.customCoins] === 'object') {
+    customCoins = r[STORAGE_KEYS.customCoins];
+  }
+  invalidateSearchCache();
+  const cached = await safeStorageLocalGet(COIN_LIST_CACHE_KEY);
+  const list = cached?.list;
+  coinListCache = Array.isArray(list) ? list.filter((c) => c?.id && c?.symbol && c?.name).slice(0, 5000) : [];
   if (coinListCache.length === 0) {
     try {
       const res = await fetch('https://api.coingecko.com/api/v3/coins/list?include_platform=false');
       if (res.ok) {
         const data = await res.json();
-        const list = (data || []).filter((c) => c?.id && c?.symbol && c?.name).slice(0, 5000);
-        coinListCache = list;
-        await chrome.storage.local.set({ [COIN_LIST_CACHE_KEY]: { list, ts: Date.now() } });
+        const arr = Array.isArray(data) ? data : [];
+        coinListCache = arr.filter((c) => c?.id && c?.symbol && c?.name).slice(0, 5000);
+        await safeStorageLocalSet({ [COIN_LIST_CACHE_KEY]: { list: coinListCache, ts: Date.now() } });
       }
     } catch {
-      // ignore
+      // fallback: use COIN_POOL only
     }
   }
 }
 
 async function saveApi(id) {
   currentApi = id;
-  await chrome.storage.sync.set({ [STORAGE_KEYS.api]: id });
+  await safeStorageSet({ [STORAGE_KEYS.api]: id });
 }
 
 async function saveDisplayList(list) {
   displayList = list;
-  await chrome.storage.sync.set({ [STORAGE_KEYS.displayList]: list });
+  await safeStorageSet({ [STORAGE_KEYS.displayList]: list });
+  invalidateSearchCache();
 }
 
 async function saveWatchlist(list) {
   watchlist = list;
-  await chrome.storage.sync.set({ [STORAGE_KEYS.watchlist]: list });
+  await safeStorageSet({ [STORAGE_KEYS.watchlist]: list });
 }
 
 async function saveCustomCoin(coin) {
+  if (!coin?.symbol) return;
   customCoins[coin.symbol] = coin;
-  await chrome.storage.sync.set({ [STORAGE_KEYS.customCoins]: customCoins });
+  await safeStorageSet({ [STORAGE_KEYS.customCoins]: customCoins });
+  invalidateSearchCache();
 }
 
-function addToDisplay(coin) {
+async function addToDisplay(coin) {
+  if (!coin?.symbol) return;
   const sym = coin.symbol;
   if (displayList.includes(sym)) return;
   const inPool = COIN_POOL.some((c) => c.symbol === sym);
-  if (!inPool) saveCustomCoin(coin);
+  if (!inPool) await saveCustomCoin(coin);
   const next = [...displayList, sym];
-  saveDisplayList(next);
+  await saveDisplayList(next);
   closeAddModal();
   load();
   renderApiAndWatchlist();
 }
 
-function removeFromDisplay(symbol) {
+async function removeFromDisplay(symbol) {
   const next = displayList.filter((s) => s !== symbol);
   if (next.length === 0) return;
-  saveDisplayList(next);
+  await saveDisplayList(next);
   const wl = watchlist.filter((s) => s !== symbol);
-  if (wl.length !== watchlist.length) saveWatchlist(wl);
+  if (wl.length !== watchlist.length) await saveWatchlist(wl);
+  invalidateSearchCache();
   load();
   renderApiAndWatchlist();
 }
@@ -188,106 +273,107 @@ function removeFromDisplay(symbol) {
 function toggleWatch(symbol) {
   const idx = watchlist.indexOf(symbol);
   const next = idx >= 0 ? watchlist.filter((s) => s !== symbol) : [...watchlist, symbol];
+  watchlist = next;
   saveWatchlist(next);
   renderApiAndWatchlist();
   const list = document.getElementById('list');
-  if (list?.children.length && _lastItems) renderList(_lastItems);
+  if (list?.children.length && _lastItems?.length) renderList(_lastItems);
 }
 
 let _lastItems = [];
 
-function applyPreset(presetId) {
+async function applyPreset(presetId) {
   const p = PRESETS[presetId];
   if (!p) return;
   const bySym = getCOINS_BY_SYMBOL();
-  saveDisplayList([...p.symbols.filter((s) => bySym[s])]);
+  const next = p.symbols.filter((s) => bySym[s]);
+  await saveDisplayList(next);
   closeAddModal();
   load();
   renderApiAndWatchlist();
 }
 
 function getCoinGeckoUrl(coins) {
-  const ids = coins.map((c) => c.id).join(',');
+  const ids = coins.map((c) => c?.id).filter(Boolean).join(',');
   return `${COINGECKO_URL}?ids=${ids}&vs_currencies=usd&include_24hr_change=true`;
 }
 
-async function fetchFromCoinGecko(coins) {
-  const url = getCoinGeckoUrl(coins);
+async function fetchJson(url) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`API 错误: ${res.status}`);
-  const data = await res.json();
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error('Invalid JSON');
+  }
+}
+
+async function fetchFromCoinGecko(coins) {
+  if (!coins.length) return [];
+  const data = await fetchJson(getCoinGeckoUrl(coins));
   return coins.map((coin) => {
-    const raw = data[coin.id];
-    return { ...coin, price: raw?.usd ?? null, change24h: raw?.usd_24hr_change ?? null };
+    const raw = data?.[coin?.id];
+    return { ...coin, price: safeParseNum(raw?.usd), change24h: safeParseNum(raw?.usd_24hr_change) };
   });
 }
 
 async function fetchFromCoinCap(coins) {
-  const res = await fetch(`${COINCAP_URL}?limit=200`);
-  if (!res.ok) throw new Error(`API 错误: ${res.status}`);
-  const json = await res.json();
+  const json = await fetchJson(`${COINCAP_URL}?limit=200`);
+  const data = json?.data ?? [];
   const byId = {};
-  (json?.data ?? []).forEach((a) => { byId[a.id] = a; });
   const bySym = {};
-  (json?.data ?? []).forEach((a) => { bySym[a.symbol?.toUpperCase()] = a; });
+  data.forEach((a) => {
+    if (a?.id) byId[a.id] = a;
+    if (a?.symbol) bySym[String(a.symbol).toUpperCase()] = a;
+  });
   return coins.map((coin) => {
-    const raw = byId[coin.coinCapId] || bySym[coin.symbol];
+    const raw = byId[coin?.coinCapId] || bySym[coin?.symbol];
     const ch = raw?.changePercent24Hr;
-    return {
-      ...coin,
-      price: raw?.priceUsd != null ? parseFloat(raw.priceUsd) : null,
-      change24h: ch != null && ch !== '' ? parseFloat(ch) : null,
-    };
+    return { ...coin, price: safeParseNum(raw?.priceUsd), change24h: safeParseNum(ch) };
   });
 }
 
 async function fetchFromBinance(coins) {
-  const symbols = coins.map((c) => `"${c.binanceSymbol}"`).join(',');
-  const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=[${symbols}]`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`API 错误: ${res.status}`);
-  const arr = await res.json();
+  const symbols = coins.map((c) => `"${c?.binanceSymbol || ''}"`).filter((s) => s !== '""').join(',');
+  if (!symbols) return coins.map((c) => ({ ...c, price: null, change24h: null }));
+  const arr = await fetchJson(`https://api.binance.com/api/v3/ticker/24hr?symbols=[${symbols}]`);
   const bySymbol = {};
-  (arr || []).forEach((t) => { bySymbol[t.symbol] = t; });
+  (Array.isArray(arr) ? arr : []).forEach((t) => { if (t?.symbol) bySymbol[t.symbol] = t; });
   return coins.map((coin) => {
-    const raw = bySymbol[coin.binanceSymbol];
-    const last = raw?.lastPrice ? parseFloat(raw.lastPrice) : null;
-    const ch = raw?.priceChangePercent ? parseFloat(raw.priceChangePercent) : null;
-    return { ...coin, price: last, change24h: ch };
+    const raw = bySymbol[coin?.binanceSymbol];
+    return { ...coin, price: safeParseNum(raw?.lastPrice), change24h: safeParseNum(raw?.priceChangePercent) };
   });
 }
 
 async function fetchFromGate(coins) {
-  const query = coins.map((c) => `currency_pair=${encodeURIComponent(c.gatePair)}`).join('&');
-  const res = await fetch(`https://api.gateio.ws/api/v4/spot/tickers?${query}`);
-  if (!res.ok) throw new Error(`API 错误: ${res.status}`);
-  const arr = await res.json();
+  const query = coins.map((c) => `currency_pair=${encodeURIComponent(c?.gatePair || '')}`).filter((q) => !q.includes('undefined')).join('&');
+  if (!query) return coins.map((c) => ({ ...c, price: null, change24h: null }));
+  const arr = await fetchJson(`https://api.gateio.ws/api/v4/spot/tickers?${query}`);
   const byPair = {};
-  (arr || []).forEach((t) => { byPair[t.currency_pair] = t; });
+  (Array.isArray(arr) ? arr : []).forEach((t) => { if (t?.currency_pair) byPair[t.currency_pair] = t; });
   return coins.map((coin) => {
-    const raw = byPair[coin.gatePair];
-    const last = raw?.last ? parseFloat(raw.last) : null;
-    const ch = raw?.change_percentage ? parseFloat(raw.change_percentage) : null;
-    return { ...coin, price: last, change24h: ch };
+    const raw = byPair[coin?.gatePair];
+    const last = raw?.last;
+    const ch = raw?.change_percentage;
+    return { ...coin, price: safeParseNum(last), change24h: safeParseNum(ch) };
   });
 }
 
 async function fetchFromOKX(coins) {
-  const res = await fetch('https://www.okx.com/api/v5/market/tickers?instType=SPOT');
-  if (!res.ok) throw new Error(`API 错误: ${res.status}`);
-  const json = await res.json();
+  const json = await fetchJson('https://www.okx.com/api/v5/market/tickers?instType=SPOT');
   const data = json?.data ?? [];
   const byInst = {};
-  data.forEach((t) => { byInst[t.instId] = t; });
+  data.forEach((t) => { if (t?.instId) byInst[t.instId] = t; });
   return coins.map((coin) => {
-    const raw = byInst[coin.okxInstId];
-    const last = raw?.last ? parseFloat(raw.last) : null;
+    const raw = byInst[coin?.okxInstId];
+    const last = raw?.last;
     let ch = null;
     if (raw?.sodUtc0 && raw?.last) {
-      const open = parseFloat(raw.sodUtc0);
-      if (open && open !== 0) ch = ((parseFloat(raw.last) - open) / open) * 100;
+      const open = safeParseNum(raw.sodUtc0);
+      if (open !== null && open !== 0) ch = ((safeParseNum(raw.last) - open) / open) * 100;
     }
-    return { ...coin, price: last, change24h: ch };
+    return { ...coin, price: safeParseNum(last), change24h: ch };
   });
 }
 
@@ -295,18 +381,12 @@ async function fetchCryptoPrices() {
   const coins = getCoinsToFetch();
   if (coins.length === 0) return [];
 
-  const fns = {
-    coingecko: fetchFromCoinGecko,
-    coincap: fetchFromCoinCap,
-    binance: fetchFromBinance,
-    gate: fetchFromGate,
-    okx: fetchFromOKX,
-  };
+  const fns = { coingecko: fetchFromCoinGecko, coincap: fetchFromCoinCap, binance: fetchFromBinance, gate: fetchFromGate, okx: fetchFromOKX };
   const fn = fns[currentApi] || fetchFromCoinGecko;
   try {
     return await fn(coins);
   } catch (e) {
-    if (currentApi === 'coingecko' && e.message.includes('429')) {
+    if (currentApi === 'coingecko' && String(e?.message || '').includes('429')) {
       return await fetchFromCoinCap(coins);
     }
     throw e;
@@ -315,75 +395,81 @@ async function fetchCryptoPrices() {
 
 function formatPrice(price) {
   if (price == null || isNaN(price)) return '—';
-  if (price >= 1000) return `$${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  if (price >= 1) return `$${price.toFixed(2)}`;
-  if (price >= 0.01) return `$${price.toFixed(4)}`;
-  return `$${price.toFixed(6)}`;
+  if (price >= 1000) return `$${Number(price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (price >= 1) return `$${Number(price).toFixed(2)}`;
+  if (price >= 0.01) return `$${Number(price).toFixed(4)}`;
+  return `$${Number(price).toFixed(6)}`;
 }
 
 function formatChange(change) {
   if (change == null || isNaN(change)) return { text: '—', cls: 'neutral' };
-  const text = `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
+  const text = `${change >= 0 ? '+' : ''}${Number(change).toFixed(2)}%`;
   const cls = change > 0 ? 'positive' : change < 0 ? 'negative' : 'neutral';
   return { text, cls };
 }
 
 function setLoading(show) {
-  document.getElementById('loading').style.display = show ? 'block' : 'none';
+  const el = document.getElementById('loading');
+  if (el) el.style.display = show ? 'block' : 'none';
 }
 
 function setError(msg) {
   const el = document.getElementById('error');
+  if (!el) return;
   el.textContent = msg || '';
   el.style.display = msg ? 'block' : 'none';
 }
 
 function setUpdated(time) {
   const el = document.getElementById('updated');
-  const locale = chrome.i18n.getUILanguage();
-  const timeStr = new Date(time).toLocaleTimeString(locale);
-  el.textContent = time ? t('updatedAt', timeStr) : '';
+  if (!el) return;
+  try {
+    const locale = runtime?.i18n?.getUILanguage?.() || 'en';
+    el.textContent = time ? t('updatedAt', new Date(time).toLocaleTimeString(locale)) : '';
+  } catch {
+    el.textContent = '';
+  }
 }
 
 function getExternalUrl(coin) {
-  const locale = chrome.i18n.getUILanguage().startsWith('zh') ? 'zh' : 'en';
-  return `https://www.coingecko.com/${locale}/coins/${coin.id}`;
+  const locale = runtime?.i18n?.getUILanguage?.()?.startsWith?.('zh') ? 'zh' : 'en';
+  const id = coin?.id || 'bitcoin';
+  return `https://www.coingecko.com/${locale}/coins/${id}`;
 }
 
 function renderApiSelector() {
   const sel = document.getElementById('apiSource');
-  sel.innerHTML = API_SOURCES.map((s) => `<option value="${s.id}" ${s.id === currentApi ? 'selected' : ''}>${s.name} (${t(s.descKey)})</option>`).join('');
-  sel.onchange = async () => {
-    await saveApi(sel.value);
-    load();
-  };
+  if (!sel) return;
+  sel.innerHTML = API_SOURCES.map((s) => `<option value="${s.id}" ${s.id === currentApi ? 'selected' : ''}>${escapeHtml(s.name)} (${t(s.descKey)})</option>`).join('');
+  sel.onchange = async () => { await saveApi(sel.value); load(); };
 }
 
 function renderHeaderActions() {
   const presetsSel = document.getElementById('presetList');
-  presetsSel.innerHTML = `<option value="">${t('preset')}</option>` + Object.entries(PRESETS).map(([id, p]) => `<option value="${id}">${t(p.nameKey)}</option>`).join('');
-  presetsSel.onchange = () => {
-    const v = presetsSel.value;
-    if (v) applyPreset(v);
-  };
+  if (!presetsSel) return;
+  presetsSel.innerHTML = `<option value="">${t('preset')}</option>` + Object.entries(PRESETS).map(([id, p]) => `<option value="${escapeHtml(id)}">${t(p.nameKey)}</option>`).join('');
+  presetsSel.onchange = () => { const v = presetsSel.value; if (v) applyPreset(v); };
 }
 
 function openAddModal() {
-  document.getElementById('addSearchInput').value = '';
-  document.getElementById('addModal').classList.add('open');
+  const inp = document.getElementById('addSearchInput');
+  const modal = document.getElementById('addModal');
+  if (inp) inp.value = '';
+  if (modal) modal.classList.add('open');
   renderAddPicker('');
-  document.getElementById('addSearchInput').focus();
+  if (inp) inp.focus();
 }
 
 function closeAddModal() {
-  document.getElementById('addModal').classList.remove('open');
+  const modal = document.getElementById('addModal');
+  if (modal) modal.classList.remove('open');
 }
 
 function filterCoins(query) {
-  const q = (query || '').trim().toLowerCase();
+  const q = String(query || '').trim().toLowerCase();
   const all = getSearchableCoins();
   const excluded = new Set(displayList);
-  const available = all.filter((c) => !excluded.has(c.symbol));
+  const available = all.filter((c) => c?.symbol && !excluded.has(c.symbol));
   if (!q) return available.slice(0, SEARCH_RESULT_LIMIT);
   return available.filter((c) =>
     (c.symbol || '').toLowerCase().includes(q) || (c.name || '').toLowerCase().includes(q) || (c.id || '').toLowerCase().includes(q)
@@ -391,8 +477,9 @@ function filterCoins(query) {
 }
 
 function renderAddPicker(query) {
-  const matches = filterCoins(query);
   const container = document.getElementById('addPickerList');
+  if (!container) return;
+  const matches = filterCoins(query);
   if (matches.length === 0) {
     container.innerHTML = `<p class="add-empty">${t('noResults')}</p>`;
     return;
@@ -402,10 +489,17 @@ function renderAddPicker(query) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'add-picker-item';
-    btn.innerHTML = `<span class="add-symbol">${c.symbol}</span> ${c.name}`;
+    btn.innerHTML = `<span class="add-symbol">${escapeHtml(c.symbol)}</span> ${escapeHtml(c.name || '')}`;
     btn.onclick = () => addToDisplay(c);
     container.appendChild(btn);
   });
+}
+
+function onSearchInput() {
+  if (searchDebounceId) clearTimeout(searchDebounceId);
+  const inp = document.getElementById('addSearchInput');
+  const val = inp?.value ?? '';
+  searchDebounceId = setTimeout(() => { searchDebounceId = null; renderAddPicker(val); }, SEARCH_DEBOUNCE_MS);
 }
 
 function renderApiAndWatchlist() {
@@ -413,75 +507,78 @@ function renderApiAndWatchlist() {
   renderHeaderActions();
   const bySym = getCOINS_BY_SYMBOL();
   const wl = document.getElementById('watchlistTags');
+  if (!wl) return;
   wl.innerHTML = displayList.map((sym) => {
     const c = bySym[sym];
     if (!c) return '';
     const active = watchlist.includes(sym);
-    return `<span class="tag ${active ? 'active' : ''}" data-symbol="${sym}" title="${active ? t('removeFromWatch') : t('addToWatch')}">${sym}</span>`;
+    return `<span class="tag ${active ? 'active' : ''}" data-symbol="${escapeHtml(sym)}" title="${active ? t('removeFromWatch') : t('addToWatch')}">${escapeHtml(sym)}</span>`;
   }).filter(Boolean).join('');
   wl.querySelectorAll('.tag').forEach((el) => {
-    el.onclick = () => toggleWatch(el.dataset.symbol);
+    const sym = el.dataset?.symbol;
+    if (sym) el.onclick = () => toggleWatch(sym);
   });
 }
 
 function sortByWatchlist(items) {
   const set = new Set(watchlist);
   return [...items].sort((a, b) => {
-    const aW = set.has(a.symbol) ? 1 : 0;
-    const bW = set.has(b.symbol) ? 1 : 0;
+    const aW = set.has(a?.symbol) ? 1 : 0;
+    const bW = set.has(b?.symbol) ? 1 : 0;
     if (aW !== bW) return bW - aW;
-    return watchlist.indexOf(a.symbol) - watchlist.indexOf(b.symbol);
+    return watchlist.indexOf(a?.symbol) - watchlist.indexOf(b?.symbol);
   });
 }
 
 function renderList(items) {
-  const sorted = sortByWatchlist(items);
   const list = document.getElementById('list');
-  list.innerHTML = sorted
-    .map((item) => {
-      const isWatched = watchlist.includes(item.symbol);
-      const { text: changeText, cls } = formatChange(item.change24h);
-      const url = getExternalUrl(item);
-      return `
-        <li class="list-item ${isWatched ? 'watched' : ''}" data-symbol="${item.symbol}">
-          <div class="coin-left">
-            <button type="button" class="btn-watch ${isWatched ? 'on' : ''}" data-symbol="${item.symbol}" title="${isWatched ? t('removeFromWatch') : t('addToWatch')}">${isWatched ? '★' : '☆'}</button>
-            <button type="button" class="btn-delete" data-symbol="${item.symbol}" title="${t('removeFromList')}">🗑</button>
-            <a href="${url}" target="_blank" rel="noopener" class="btn-link" title="${t('viewDetails')}">↗</a>
-            <div class="coin-info">
-              <span class="coin-name">${item.name}</span>
-              <span class="coin-symbol">${item.symbol}</span>
-            </div>
+  if (!list) return;
+  const sorted = sortByWatchlist(items);
+  list.innerHTML = sorted.map((item) => {
+    const isWatched = watchlist.includes(item?.symbol);
+    const { text: changeText, cls } = formatChange(item?.change24h);
+    const url = getExternalUrl(item);
+    const name = escapeHtml(item?.name);
+    const symbol = escapeHtml(item?.symbol);
+    return `
+      <li class="list-item ${isWatched ? 'watched' : ''}" data-symbol="${symbol}">
+        <div class="coin-left">
+          <button type="button" class="btn-watch ${isWatched ? 'on' : ''}" data-symbol="${symbol}" title="${isWatched ? t('removeFromWatch') : t('addToWatch')}">${isWatched ? '★' : '☆'}</button>
+          <button type="button" class="btn-delete" data-symbol="${symbol}" title="${t('removeFromList')}">🗑</button>
+          <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="btn-link" title="${t('viewDetails')}">↗</a>
+          <div class="coin-info">
+            <span class="coin-name">${name}</span>
+            <span class="coin-symbol">${symbol}</span>
           </div>
-          <div class="coin-data">
-            <div class="coin-price">${formatPrice(item.price)}</div>
-            <div class="coin-change ${cls}">${changeText} ${t('change24h')}</div>
-          </div>
-        </li>
-      `;
-    })
-    .join('');
-  list.querySelectorAll('.btn-watch').forEach((el) => {
-    el.onclick = (e) => { e.preventDefault(); toggleWatch(el.dataset.symbol); };
-  });
-  list.querySelectorAll('.btn-delete').forEach((el) => {
-    el.onclick = (e) => { e.preventDefault(); removeFromDisplay(el.dataset.symbol); };
-  });
+        </div>
+        <div class="coin-data">
+          <div class="coin-price">${formatPrice(item?.price)}</div>
+          <div class="coin-change ${cls}">${changeText} ${t('change24h')}</div>
+        </div>
+      </li>
+    `;
+  }).join('');
+  list.querySelectorAll('.btn-watch').forEach((el) => { el.onclick = (e) => { e.preventDefault(); toggleWatch(el.dataset?.symbol); }; });
+  list.querySelectorAll('.btn-delete').forEach((el) => { el.onclick = (e) => { e.preventDefault(); removeFromDisplay(el.dataset?.symbol); }; });
 }
 
 async function load() {
+  loadAbort = false;
   setError('');
   setLoading(true);
   try {
     const items = await fetchCryptoPrices();
-    _lastItems = items;
+    if (loadAbort) return;
+    _lastItems = items || [];
     setLoading(false);
-    renderList(items);
+    renderList(_lastItems);
     setUpdated(Date.now());
   } catch (e) {
+    if (loadAbort) return;
     setLoading(false);
-    setError(t('loadError', e.message));
-    document.getElementById('list').innerHTML = '';
+    setError(t('loadError', e?.message || 'Unknown'));
+    const list = document.getElementById('list');
+    if (list) list.innerHTML = '';
   }
 }
 
@@ -491,31 +588,41 @@ function startAutoRefresh() {
 }
 
 function stopAutoRefresh() {
-  if (refreshTimerId) {
-    clearInterval(refreshTimerId);
-    refreshTimerId = null;
-  }
+  if (searchDebounceId) { clearTimeout(searchDebounceId); searchDebounceId = null; }
+  if (refreshTimerId) { clearInterval(refreshTimerId); refreshTimerId = null; }
 }
 
 async function init() {
   applyI18n();
-  await loadStorage();
+  try {
+    await loadStorage();
+  } catch (err) {
+    console.warn('loadStorage:', err);
+  }
   renderApiAndWatchlist();
-  document.getElementById('refresh').onclick = () => load();
-  document.getElementById('btnAdd').onclick = openAddModal;
-  document.getElementById('addModalOverlay').onclick = closeAddModal;
-  document.getElementById('addModalClose').onclick = closeAddModal;
+  const refreshBtn = document.getElementById('refresh');
+  if (refreshBtn) refreshBtn.onclick = () => load();
+  const btnAdd = document.getElementById('btnAdd');
+  if (btnAdd) btnAdd.onclick = openAddModal;
+  const overlay = document.getElementById('addModalOverlay');
+  if (overlay) overlay.onclick = closeAddModal;
+  const modalClose = document.getElementById('addModalClose');
+  if (modalClose) modalClose.onclick = closeAddModal;
   const searchInput = document.getElementById('addSearchInput');
   if (searchInput) {
-    searchInput.oninput = () => renderAddPicker(searchInput.value);
-    searchInput.onkeydown = (e) => { if (e.key === 'Escape') closeAddModal(); };
+    searchInput.oninput = onSearchInput;
+    searchInput.onkeydown = (e) => { if (e?.key === 'Escape') closeAddModal(); };
   }
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) stopAutoRefresh();
-    else startAutoRefresh();
+    if (document.hidden) { loadAbort = true; stopAutoRefresh(); }
+    else { startAutoRefresh(); }
   });
   load();
   startAutoRefresh();
 }
 
-document.addEventListener('DOMContentLoaded', init);
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
