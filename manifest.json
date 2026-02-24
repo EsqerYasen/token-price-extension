@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Crypto Price Tracker",
+  "version": "1.0.2",
+  "description": "跟踪主流加密货币价格与24小时涨跌幅",
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://api.coingecko.com/*",
+    "https://api.coincap.io/*",
+    "https://api.binance.com/*",
+    "https://api.gateio.ws/*",
+    "https://www.okx.com/*"
+  ]
+}
