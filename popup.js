@@ -573,6 +573,10 @@ async function load() {
     setLoading(false);
     renderList(_lastItems);
     setUpdated(Date.now());
+    const btc = _lastItems.find((c) => c?.symbol === 'BTC');
+    if (btc != null && runtime?.runtime?.sendMessage) {
+      runtime.runtime.sendMessage({ type: 'UPDATE_BADGE', btcPrice: btc.price, btcChange24h: btc.change24h }).catch(() => {});
+    }
   } catch (e) {
     if (loadAbort) return;
     setLoading(false);

@@ -1,20 +1,21 @@
 /**
  * Background: badge + load coin list on browser start
- * 容错 / 稳定性 / 资源优化
  */
-
-const runtime = typeof chrome !== 'undefined' ? chrome : typeof browser !== 'undefined' ? browser : null;
-if (!runtime) return;
 
 const COINGECKO_LIST_URL = 'https://api.coingecko.com/api/v3/coins/list?include_platform=false';
 const COINGECKO_PRICE_URL = 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true';
 const BADGE_INTERVAL_MS = 60000;
+const BADGE_INITIAL_DELAY_MS = 800;
 const COIN_LIST_CACHE_KEY = 'crypto_tracker_coin_list';
 const COIN_LIST_CACHE_HOURS = 24;
 
 let badgeTimerId = null;
 
+const action = (typeof chrome !== 'undefined' && chrome?.action) ? chrome.action : (typeof browser !== 'undefined' && browser?.action) ? browser.action : null;
+const runtime = typeof chrome !== 'undefined' ? chrome : typeof browser !== 'undefined' ? browser : null;
+
 async function fetchCoinList() {
+  if (!runtime?.storage?.local?.set) return;
   try {
     const res = await fetch(COINGECKO_LIST_URL);
     if (!res.ok) return;
@@ -35,6 +36,7 @@ async function fetchCoinList() {
 }
 
 async function maybeRefreshCoinList() {
+  if (!runtime?.storage?.local?.get) return;
   try {
     const r = await runtime.storage.local.get(COIN_LIST_CACHE_KEY);
     const cached = r?.[COIN_LIST_CACHE_KEY];
@@ -50,13 +52,15 @@ async function maybeRefreshCoinList() {
 function formatBadge(price) {
   if (price == null || isNaN(price)) return '';
   const n = Number(price);
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  if (n >= 1) return n.toFixed(1);
-  if (n >= 0.01) return n.toFixed(2);
-  return n.toFixed(3);
+  if (n >= 10000) return `${Math.round(n / 1000)}k`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`.slice(0, 4);
+  if (n >= 1) return n.toFixed(1).slice(0, 4);
+  if (n >= 0.01) return n.toFixed(2).slice(0, 4);
+  return n.toFixed(3).slice(0, 4);
 }
 
 async function updateBadge() {
+  if (!action?.setBadgeText) return;
   try {
     const res = await fetch(COINGECKO_PRICE_URL);
     if (!res.ok) return;
@@ -71,36 +75,54 @@ async function updateBadge() {
     const change24h = data?.bitcoin?.usd_24hr_change;
     const textVal = formatBadge(price);
     if (textVal) {
-      try {
-        const color = change24h != null && !isNaN(change24h)
-          ? (Number(change24h) >= 0 ? '#0d9488' : '#dc2626')
-          : '#1a1a2e';
-        await runtime.action.setBadgeText({ text: textVal });
-        await runtime.action.setBadgeBackgroundColor({ color });
-      } catch {
-        // action API may be unavailable in some contexts
-      }
+      const color = change24h != null && !isNaN(change24h)
+        ? (Number(change24h) >= 0 ? '#0d9488' : '#dc2626')
+        : '#1a1a2e';
+      await action.setBadgeText({ text: textVal });
+      await action.setBadgeBackgroundColor({ color });
     }
   } catch {
-    // ignore
+    setTimeout(updateBadge, 3000);
   }
 }
 
 function startBadgeUpdates() {
-  updateBadge();
   if (badgeTimerId) clearInterval(badgeTimerId);
-  badgeTimerId = setInterval(updateBadge, BADGE_INTERVAL_MS);
+  setTimeout(() => {
+    updateBadge();
+    badgeTimerId = setInterval(updateBadge, BADGE_INTERVAL_MS);
+  }, BADGE_INITIAL_DELAY_MS);
 }
 
-runtime.runtime.onStartup.addListener(() => {
-  maybeRefreshCoinList();
-  startBadgeUpdates();
-});
+async function setBadgeFromData(price, change24h) {
+  if (!action?.setBadgeText) return;
+  const textVal = formatBadge(price);
+  if (!textVal) return;
+  const color = change24h != null && !isNaN(change24h)
+    ? (Number(change24h) >= 0 ? '#0d9488' : '#dc2626')
+    : '#1a1a2e';
+  await action.setBadgeText({ text: textVal });
+  await action.setBadgeBackgroundColor({ color });
+}
 
-runtime.runtime.onInstalled.addListener(() => {
-  maybeRefreshCoinList();
-  startBadgeUpdates();
-});
+if (runtime?.runtime?.onMessage) {
+  runtime.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg?.type === 'UPDATE_BADGE' && msg?.btcPrice != null) {
+      setBadgeFromData(msg.btcPrice, msg.btcChange24h).then(() => sendResponse?.({ ok: true })).catch(() => sendResponse?.({ ok: false }));
+      return true;
+    }
+  });
+}
 
-// 每次 SW 启动时都更新 badge（包括从休眠唤醒后）
+if (runtime?.runtime) {
+  runtime.runtime.onStartup.addListener(() => {
+    maybeRefreshCoinList();
+    startBadgeUpdates();
+  });
+  runtime.runtime.onInstalled.addListener(() => {
+    maybeRefreshCoinList();
+    startBadgeUpdates();
+  });
+}
+
 startBadgeUpdates();
