@@ -1,6 +1,25 @@
 /**
- * Crypto Price Tracker - 多 API 源 + 关注 + 展示列表增删改查
+ * Crypto Price Tracker - i18n, multi-API, watchlist, search add
  */
+
+function t(key, ...subs) {
+  return chrome.i18n.getMessage(key, subs) || key;
+}
+
+function applyI18n() {
+  document.querySelectorAll('[data-i18n]').forEach((el) => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach((el) => {
+    el.title = t(el.dataset.i18nTitle);
+  });
+  const list = document.getElementById('list');
+  if (list) list.setAttribute('aria-label', t('listAriaLabel'));
+  const title = document.querySelector('title');
+  if (title) title.textContent = t('extName');
+  const searchInput = document.getElementById('addSearchInput');
+  if (searchInput) searchInput.placeholder = t('searchPlaceholder');
+}
 
 const COIN_POOL = [
   { id: 'bitcoin', coinCapId: 'bitcoin', binanceSymbol: 'BTCUSDT', gatePair: 'btc_usdt', okxInstId: 'BTC-USDT', name: 'Bitcoin', symbol: 'BTC' },
@@ -26,48 +45,102 @@ const COIN_POOL = [
 ];
 
 const API_SOURCES = [
-  { id: 'coingecko', name: 'CoinGecko', desc: '聚合' },
-  { id: 'coincap', name: 'CoinCap', desc: '聚合' },
-  { id: 'binance', name: 'Binance', desc: '交易所' },
-  { id: 'gate', name: 'Gate.io', desc: '交易所' },
-  { id: 'okx', name: 'OKX', desc: '交易所' },
+  { id: 'coingecko', name: 'CoinGecko', descKey: 'apiAggregator' },
+  { id: 'coincap', name: 'CoinCap', descKey: 'apiAggregator' },
+  { id: 'binance', name: 'Binance', descKey: 'apiExchange' },
+  { id: 'gate', name: 'Gate.io', descKey: 'apiExchange' },
+  { id: 'okx', name: 'OKX', descKey: 'apiExchange' },
 ];
 
 const PRESETS = {
-  default: { name: '主流', symbols: ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX'] },
-  defi: { name: 'DeFi', symbols: ['ETH', 'UNI', 'AAVE', 'LINK', 'SOL', 'AVAX'] },
-  layer2: { name: 'Layer2', symbols: ['ETH', 'MATIC', 'AVAX', 'SOL', 'ARB', 'OP'] },
+  default: { nameKey: 'presetMainstream', symbols: ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX'] },
+  defi: { nameKey: 'presetDefi', symbols: ['ETH', 'UNI', 'AAVE', 'LINK', 'SOL', 'AVAX'] },
+  layer2: { nameKey: 'presetLayer2', symbols: ['ETH', 'MATIC', 'AVAX', 'SOL', 'ARB', 'OP'] },
 };
 
 const REFRESH_INTERVAL_MS = 15000;
 const COINGECKO_URL = 'https://api.coingecko.com/api/v3/simple/price';
 const COINCAP_URL = 'https://api.coincap.io/v2/assets';
+const COIN_LIST_CACHE_KEY = 'crypto_tracker_coin_list';
+const SEARCH_RESULT_LIMIT = 20;
 
 let refreshTimerId = null;
 let currentApi = 'coingecko';
 let displayList = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX'];
 let watchlist = ['BTC', 'ETH'];
+let customCoins = {};
+let coinListCache = [];
 
 const STORAGE_KEYS = {
   api: 'crypto_tracker_api',
   displayList: 'crypto_tracker_display',
   watchlist: 'crypto_tracker_watchlist',
+  customCoins: 'crypto_tracker_custom_coins',
 };
 
-const COINS_BY_SYMBOL = {};
-COIN_POOL.forEach((c) => { COINS_BY_SYMBOL[c.symbol] = c; });
+function toDerivedCoin(raw) {
+  const sym = (raw.symbol || '').toUpperCase();
+  const low = (raw.symbol || '').toLowerCase();
+  return {
+    id: raw.id,
+    coinCapId: raw.id,
+    binanceSymbol: sym + 'USDT',
+    gatePair: low + '_usdt',
+    okxInstId: sym + '-USDT',
+    name: raw.name || sym,
+    symbol: sym,
+  };
+}
+
+function getCOINS_BY_SYMBOL() {
+  const map = {};
+  COIN_POOL.forEach((c) => { map[c.symbol] = c; });
+  Object.values(customCoins).forEach((c) => { map[c.symbol] = c; });
+  return map;
+}
 
 function getCoinsToFetch() {
-  return displayList.map((s) => COINS_BY_SYMBOL[s]).filter(Boolean);
+  const bySym = getCOINS_BY_SYMBOL();
+  return displayList.map((s) => bySym[s]).filter(Boolean);
+}
+
+function getSearchableCoins() {
+  const bySym = {};
+  COIN_POOL.forEach((c) => { bySym[c.symbol] = c; });
+  Object.values(customCoins).forEach((c) => { bySym[c.symbol] = c; });
+  coinListCache.forEach((c) => {
+    const sym = (c.symbol || '').toUpperCase();
+    if (!bySym[sym] && c.id && c.symbol) {
+      bySym[sym] = toDerivedCoin(c);
+    }
+  });
+  return Object.values(bySym);
 }
 
 async function loadStorage() {
-  const r = await chrome.storage.sync.get([STORAGE_KEYS.api, STORAGE_KEYS.displayList, STORAGE_KEYS.watchlist]);
+  const r = await chrome.storage.sync.get([STORAGE_KEYS.api, STORAGE_KEYS.displayList, STORAGE_KEYS.watchlist, STORAGE_KEYS.customCoins]);
   if (r[STORAGE_KEYS.api]) currentApi = r[STORAGE_KEYS.api];
   if (r[STORAGE_KEYS.displayList] && Array.isArray(r[STORAGE_KEYS.displayList]) && r[STORAGE_KEYS.displayList].length > 0) {
     displayList = r[STORAGE_KEYS.displayList];
   }
   if (r[STORAGE_KEYS.watchlist] && Array.isArray(r[STORAGE_KEYS.watchlist])) watchlist = r[STORAGE_KEYS.watchlist];
+  if (r[STORAGE_KEYS.customCoins] && typeof r[STORAGE_KEYS.customCoins] === 'object') customCoins = r[STORAGE_KEYS.customCoins];
+  const local = await chrome.storage.local.get(COIN_LIST_CACHE_KEY);
+  const cached = local[COIN_LIST_CACHE_KEY];
+  coinListCache = (cached?.list || []).filter((c) => c?.id && c?.symbol && c?.name);
+  if (coinListCache.length === 0) {
+    try {
+      const res = await fetch('https://api.coingecko.com/api/v3/coins/list?include_platform=false');
+      if (res.ok) {
+        const data = await res.json();
+        const list = (data || []).filter((c) => c?.id && c?.symbol && c?.name).slice(0, 5000);
+        coinListCache = list;
+        await chrome.storage.local.set({ [COIN_LIST_CACHE_KEY]: { list, ts: Date.now() } });
+      }
+    } catch {
+      // ignore
+    }
+  }
 }
 
 async function saveApi(id) {
@@ -85,9 +158,17 @@ async function saveWatchlist(list) {
   await chrome.storage.sync.set({ [STORAGE_KEYS.watchlist]: list });
 }
 
-function addToDisplay(symbol) {
-  if (displayList.includes(symbol)) return;
-  const next = [...displayList, symbol];
+async function saveCustomCoin(coin) {
+  customCoins[coin.symbol] = coin;
+  await chrome.storage.sync.set({ [STORAGE_KEYS.customCoins]: customCoins });
+}
+
+function addToDisplay(coin) {
+  const sym = coin.symbol;
+  if (displayList.includes(sym)) return;
+  const inPool = COIN_POOL.some((c) => c.symbol === sym);
+  if (!inPool) saveCustomCoin(coin);
+  const next = [...displayList, sym];
   saveDisplayList(next);
   closeAddModal();
   load();
@@ -118,7 +199,8 @@ let _lastItems = [];
 function applyPreset(presetId) {
   const p = PRESETS[presetId];
   if (!p) return;
-  saveDisplayList([...p.symbols.filter((s) => COINS_BY_SYMBOL[s])]);
+  const bySym = getCOINS_BY_SYMBOL();
+  saveDisplayList([...p.symbols.filter((s) => bySym[s])]);
   closeAddModal();
   load();
   renderApiAndWatchlist();
@@ -141,13 +223,15 @@ async function fetchFromCoinGecko(coins) {
 }
 
 async function fetchFromCoinCap(coins) {
-  const res = await fetch(`${COINCAP_URL}?limit=100`);
+  const res = await fetch(`${COINCAP_URL}?limit=200`);
   if (!res.ok) throw new Error(`API 错误: ${res.status}`);
   const json = await res.json();
   const byId = {};
   (json?.data ?? []).forEach((a) => { byId[a.id] = a; });
+  const bySym = {};
+  (json?.data ?? []).forEach((a) => { bySym[a.symbol?.toUpperCase()] = a; });
   return coins.map((coin) => {
-    const raw = byId[coin.coinCapId];
+    const raw = byId[coin.coinCapId] || bySym[coin.symbol];
     const ch = raw?.changePercent24Hr;
     return {
       ...coin,
@@ -164,7 +248,7 @@ async function fetchFromBinance(coins) {
   if (!res.ok) throw new Error(`API 错误: ${res.status}`);
   const arr = await res.json();
   const bySymbol = {};
-  arr.forEach((t) => { bySymbol[t.symbol] = t; });
+  (arr || []).forEach((t) => { bySymbol[t.symbol] = t; });
   return coins.map((coin) => {
     const raw = bySymbol[coin.binanceSymbol];
     const last = raw?.lastPrice ? parseFloat(raw.lastPrice) : null;
@@ -179,7 +263,7 @@ async function fetchFromGate(coins) {
   if (!res.ok) throw new Error(`API 错误: ${res.status}`);
   const arr = await res.json();
   const byPair = {};
-  arr.forEach((t) => { byPair[t.currency_pair] = t; });
+  (arr || []).forEach((t) => { byPair[t.currency_pair] = t; });
   return coins.map((coin) => {
     const raw = byPair[coin.gatePair];
     const last = raw?.last ? parseFloat(raw.last) : null;
@@ -256,16 +340,19 @@ function setError(msg) {
 
 function setUpdated(time) {
   const el = document.getElementById('updated');
-  el.textContent = time ? `更新于 ${new Date(time).toLocaleTimeString('zh-CN')}` : '';
+  const locale = chrome.i18n.getUILanguage();
+  const timeStr = new Date(time).toLocaleTimeString(locale);
+  el.textContent = time ? t('updatedAt', timeStr) : '';
 }
 
 function getExternalUrl(coin) {
-  return `https://www.coingecko.com/zh/%E5%8A%A0%E5%AF%86%E8%B4%A7%E5%B8%81/${coin.id}`;
+  const locale = chrome.i18n.getUILanguage().startsWith('zh') ? 'zh' : 'en';
+  return `https://www.coingecko.com/${locale}/coins/${coin.id}`;
 }
 
 function renderApiSelector() {
   const sel = document.getElementById('apiSource');
-  sel.innerHTML = API_SOURCES.map((s) => `<option value="${s.id}" ${s.id === currentApi ? 'selected' : ''}>${s.name}</option>`).join('');
+  sel.innerHTML = API_SOURCES.map((s) => `<option value="${s.id}" ${s.id === currentApi ? 'selected' : ''}>${s.name} (${t(s.descKey)})</option>`).join('');
   sel.onchange = async () => {
     await saveApi(sel.value);
     load();
@@ -274,42 +361,64 @@ function renderApiSelector() {
 
 function renderHeaderActions() {
   const presetsSel = document.getElementById('presetList');
-  presetsSel.innerHTML = Object.entries(PRESETS).map(([id, p]) => `<option value="${id}">${p.name}</option>`).join('');
-  presetsSel.onchange = () => applyPreset(presetsSel.value);
+  presetsSel.innerHTML = `<option value="">${t('preset')}</option>` + Object.entries(PRESETS).map(([id, p]) => `<option value="${id}">${t(p.nameKey)}</option>`).join('');
+  presetsSel.onchange = () => {
+    const v = presetsSel.value;
+    if (v) applyPreset(v);
+  };
 }
 
 function openAddModal() {
+  document.getElementById('addSearchInput').value = '';
   document.getElementById('addModal').classList.add('open');
-  renderAddPicker();
+  renderAddPicker('');
+  document.getElementById('addSearchInput').focus();
 }
 
 function closeAddModal() {
   document.getElementById('addModal').classList.remove('open');
 }
 
-function renderAddPicker() {
-  const available = COIN_POOL.filter((c) => !displayList.includes(c.symbol));
+function filterCoins(query) {
+  const q = (query || '').trim().toLowerCase();
+  const all = getSearchableCoins();
+  const excluded = new Set(displayList);
+  const available = all.filter((c) => !excluded.has(c.symbol));
+  if (!q) return available.slice(0, SEARCH_RESULT_LIMIT);
+  return available.filter((c) =>
+    (c.symbol || '').toLowerCase().includes(q) || (c.name || '').toLowerCase().includes(q) || (c.id || '').toLowerCase().includes(q)
+  ).slice(0, SEARCH_RESULT_LIMIT);
+}
+
+function renderAddPicker(query) {
+  const matches = filterCoins(query);
   const container = document.getElementById('addPickerList');
-  if (available.length === 0) {
-    container.innerHTML = '<p class="add-empty">已在列表中</p>';
+  if (matches.length === 0) {
+    container.innerHTML = `<p class="add-empty">${t('noResults')}</p>`;
     return;
   }
-  container.innerHTML = available.map((c) =>
-    `<button type="button" class="add-picker-item" data-symbol="${c.symbol}"><span class="add-symbol">${c.symbol}</span> ${c.name}</button>`
-  ).join('');
-  container.querySelectorAll('.add-picker-item').forEach((el) => {
-    el.onclick = () => addToDisplay(el.dataset.symbol);
+  container.innerHTML = '';
+  matches.forEach((c) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'add-picker-item';
+    btn.innerHTML = `<span class="add-symbol">${c.symbol}</span> ${c.name}`;
+    btn.onclick = () => addToDisplay(c);
+    container.appendChild(btn);
   });
 }
 
 function renderApiAndWatchlist() {
   renderApiSelector();
   renderHeaderActions();
+  const bySym = getCOINS_BY_SYMBOL();
   const wl = document.getElementById('watchlistTags');
-  wl.innerHTML = COIN_POOL.filter((c) => displayList.includes(c.symbol)).map((c) => {
-    const active = watchlist.includes(c.symbol);
-    return `<span class="tag ${active ? 'active' : ''}" data-symbol="${c.symbol}" title="${active ? '取消关注' : '加关注'}">${c.symbol}</span>`;
-  }).join('');
+  wl.innerHTML = displayList.map((sym) => {
+    const c = bySym[sym];
+    if (!c) return '';
+    const active = watchlist.includes(sym);
+    return `<span class="tag ${active ? 'active' : ''}" data-symbol="${sym}" title="${active ? t('removeFromWatch') : t('addToWatch')}">${sym}</span>`;
+  }).filter(Boolean).join('');
   wl.querySelectorAll('.tag').forEach((el) => {
     el.onclick = () => toggleWatch(el.dataset.symbol);
   });
@@ -336,9 +445,9 @@ function renderList(items) {
       return `
         <li class="list-item ${isWatched ? 'watched' : ''}" data-symbol="${item.symbol}">
           <div class="coin-left">
-            <button type="button" class="btn-watch ${isWatched ? 'on' : ''}" data-symbol="${item.symbol}" title="${isWatched ? '取消关注' : '加关注'}">${isWatched ? '★' : '☆'}</button>
-            <button type="button" class="btn-delete" data-symbol="${item.symbol}" title="从列表移除">🗑</button>
-            <a href="${url}" target="_blank" rel="noopener" class="btn-link" title="查看详情">↗</a>
+            <button type="button" class="btn-watch ${isWatched ? 'on' : ''}" data-symbol="${item.symbol}" title="${isWatched ? t('removeFromWatch') : t('addToWatch')}">${isWatched ? '★' : '☆'}</button>
+            <button type="button" class="btn-delete" data-symbol="${item.symbol}" title="${t('removeFromList')}">🗑</button>
+            <a href="${url}" target="_blank" rel="noopener" class="btn-link" title="${t('viewDetails')}">↗</a>
             <div class="coin-info">
               <span class="coin-name">${item.name}</span>
               <span class="coin-symbol">${item.symbol}</span>
@@ -346,7 +455,7 @@ function renderList(items) {
           </div>
           <div class="coin-data">
             <div class="coin-price">${formatPrice(item.price)}</div>
-            <div class="coin-change ${cls}">${changeText} (24h)</div>
+            <div class="coin-change ${cls}">${changeText} ${t('change24h')}</div>
           </div>
         </li>
       `;
@@ -371,7 +480,7 @@ async function load() {
     setUpdated(Date.now());
   } catch (e) {
     setLoading(false);
-    setError(`加载失败: ${e.message}。请切换 API 源或点击刷新。`);
+    setError(t('loadError', e.message));
     document.getElementById('list').innerHTML = '';
   }
 }
@@ -389,12 +498,18 @@ function stopAutoRefresh() {
 }
 
 async function init() {
+  applyI18n();
   await loadStorage();
   renderApiAndWatchlist();
   document.getElementById('refresh').onclick = () => load();
   document.getElementById('btnAdd').onclick = openAddModal;
   document.getElementById('addModalOverlay').onclick = closeAddModal;
   document.getElementById('addModalClose').onclick = closeAddModal;
+  const searchInput = document.getElementById('addSearchInput');
+  if (searchInput) {
+    searchInput.oninput = () => renderAddPicker(searchInput.value);
+    searchInput.onkeydown = (e) => { if (e.key === 'Escape') closeAddModal(); };
+  }
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) stopAutoRefresh();
     else startAutoRefresh();

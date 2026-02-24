@@ -1,0 +1,80 @@
+{
+  "extName": {
+    "message": "加密货币价格跟踪"
+  },
+  "extDesc": {
+    "message": "跟踪主流加密货币价格与24小时涨跌幅"
+  },
+  "title": {
+    "message": "加密货币行情"
+  },
+  "preset": {
+    "message": "预设"
+  },
+  "addToken": {
+    "message": "添加 Token"
+  },
+  "addTokenBtn": {
+    "message": "添加 Token"
+  },
+  "dataSource": {
+    "message": "数据源："
+  },
+  "watch": {
+    "message": "关注："
+  },
+  "loading": {
+    "message": "加载中..."
+  },
+  "loadError": {
+    "message": "加载失败: $1。请切换 API 源或点击刷新。"
+  },
+  "updatedAt": {
+    "message": "更新于 $1"
+  },
+  "refresh": {
+    "message": "刷新"
+  },
+  "addToWatch": {
+    "message": "加关注"
+  },
+  "removeFromWatch": {
+    "message": "取消关注"
+  },
+  "removeFromList": {
+    "message": "从列表移除"
+  },
+  "viewDetails": {
+    "message": "查看详情"
+  },
+  "alreadyInList": {
+    "message": "已在列表中"
+  },
+  "presetMainstream": {
+    "message": "主流"
+  },
+  "presetDefi": {
+    "message": "DeFi"
+  },
+  "presetLayer2": {
+    "message": "Layer2"
+  },
+  "apiAggregator": {
+    "message": "聚合"
+  },
+  "apiExchange": {
+    "message": "交易所"
+  },
+  "change24h": {
+    "message": "(24h)"
+  },
+  "listAriaLabel": {
+    "message": "加密货币价格列表"
+  },
+  "searchPlaceholder": {
+    "message": "输入代号或名称搜索（如 uni）"
+  },
+  "noResults": {
+    "message": "未找到匹配的币种"
+  }
+}

@@ -1,47 +1,48 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Crypto Price Tracker</title>
+  <title></title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <header class="header">
     <div class="header-top">
-      <h1 class="title">加密货币行情</h1>
+      <h1 class="title" data-i18n="title"></h1>
       <div class="header-actions">
-        <select id="presetList" class="preset-select" title="预设列表">
-          <option value="">预设</option>
+        <select id="presetList" class="preset-select" data-i18n-title="preset">
+          <option value="" data-i18n="preset"></option>
         </select>
-        <button id="btnAdd" type="button" class="btn-add" title="添加 Token">+</button>
+        <button id="btnAdd" type="button" class="btn-add" data-i18n-title="addTokenBtn">+</button>
       </div>
     </div>
     <div class="api-row">
-      <label for="apiSource">数据源：</label>
+      <label for="apiSource" data-i18n="dataSource"></label>
       <select id="apiSource" class="api-select"></select>
     </div>
     <div class="watchlist-row">
-      <span class="watchlist-label">关注：</span>
+      <span class="watchlist-label" data-i18n="watch"></span>
       <div id="watchlistTags" class="watchlist-tags"></div>
     </div>
   </header>
   <main class="main">
-    <div id="loading" class="loading" aria-live="polite">加载中...</div>
+    <div id="loading" class="loading" aria-live="polite" data-i18n="loading">Loading...</div>
     <div id="error" class="error" style="display: none;"></div>
-    <ul id="list" class="list" aria-label="加密货币价格列表"></ul>
+    <ul id="list" class="list" aria-label=""></ul>
   </main>
   <footer class="footer">
     <span id="updated" class="updated"></span>
-    <button id="refresh" type="button" class="btn-refresh" title="刷新">↻</button>
+    <button id="refresh" type="button" class="btn-refresh" data-i18n-title="refresh">↻</button>
   </footer>
   <div id="addModal" class="modal">
     <div id="addModalOverlay" class="modal-overlay"></div>
     <div class="modal-content">
       <div class="modal-header">
-        <h3>添加 Token</h3>
+        <h3 data-i18n="addToken"></h3>
         <button id="addModalClose" type="button" class="modal-close">×</button>
       </div>
+      <input type="text" id="addSearchInput" class="add-search-input" placeholder="" autocomplete="off" />
       <div id="addPickerList" class="add-picker-list"></div>
     </div>
   </div>

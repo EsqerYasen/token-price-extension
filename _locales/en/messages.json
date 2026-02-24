@@ -1,0 +1,80 @@
+{
+  "extName": {
+    "message": "Crypto Price Tracker"
+  },
+  "extDesc": {
+    "message": "Track mainstream crypto prices and 24h changes"
+  },
+  "title": {
+    "message": "Crypto Market"
+  },
+  "preset": {
+    "message": "Presets"
+  },
+  "addToken": {
+    "message": "Add Token"
+  },
+  "addTokenBtn": {
+    "message": "Add Token"
+  },
+  "dataSource": {
+    "message": "Data source:"
+  },
+  "watch": {
+    "message": "Watch:"
+  },
+  "loading": {
+    "message": "Loading..."
+  },
+  "loadError": {
+    "message": "Load failed: $1. Switch API source or click refresh."
+  },
+  "updatedAt": {
+    "message": "Updated at $1"
+  },
+  "refresh": {
+    "message": "Refresh"
+  },
+  "addToWatch": {
+    "message": "Add to watch"
+  },
+  "removeFromWatch": {
+    "message": "Remove from watch"
+  },
+  "removeFromList": {
+    "message": "Remove from list"
+  },
+  "viewDetails": {
+    "message": "View details"
+  },
+  "alreadyInList": {
+    "message": "Already in list"
+  },
+  "presetMainstream": {
+    "message": "Mainstream"
+  },
+  "presetDefi": {
+    "message": "DeFi"
+  },
+  "presetLayer2": {
+    "message": "Layer2"
+  },
+  "apiAggregator": {
+    "message": "Aggregator"
+  },
+  "apiExchange": {
+    "message": "Exchange"
+  },
+  "change24h": {
+    "message": "(24h)"
+  },
+  "listAriaLabel": {
+    "message": "Cryptocurrency price list"
+  },
+  "searchPlaceholder": {
+    "message": "Search by symbol or name (e.g. uni)"
+  },
+  "noResults": {
+    "message": "No matching coins"
+  }
+}

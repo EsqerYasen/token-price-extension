@@ -344,6 +344,19 @@ body {
   color: #333;
 }
 
+.add-search-input {
+  width: 100%;
+  padding: 10px 16px;
+  font-size: 14px;
+  border: none;
+  border-bottom: 1px solid #eee;
+  outline: none;
+}
+
+.add-search-input::placeholder {
+  color: #999;
+}
+
 .add-picker-list {
   padding: 8px;
   max-height: 200px;
