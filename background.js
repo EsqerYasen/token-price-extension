@@ -7,7 +7,7 @@ const runtime = typeof chrome !== 'undefined' ? chrome : typeof browser !== 'und
 if (!runtime) return;
 
 const COINGECKO_LIST_URL = 'https://api.coingecko.com/api/v3/coins/list?include_platform=false';
-const COINGECKO_PRICE_URL = 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd';
+const COINGECKO_PRICE_URL = 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true';
 const BADGE_INTERVAL_MS = 60000;
 const COIN_LIST_CACHE_KEY = 'crypto_tracker_coin_list';
 const COIN_LIST_CACHE_HOURS = 24;
@@ -68,11 +68,15 @@ async function updateBadge() {
       return;
     }
     const price = data?.bitcoin?.usd;
+    const change24h = data?.bitcoin?.usd_24hr_change;
     const textVal = formatBadge(price);
     if (textVal) {
       try {
+        const color = change24h != null && !isNaN(change24h)
+          ? (Number(change24h) >= 0 ? '#0d9488' : '#dc2626')
+          : '#1a1a2e';
         await runtime.action.setBadgeText({ text: textVal });
-        await runtime.action.setBadgeBackgroundColor({ color: '#1a1a2e' });
+        await runtime.action.setBadgeBackgroundColor({ color });
       } catch {
         // action API may be unavailable in some contexts
       }
@@ -97,3 +101,6 @@ runtime.runtime.onInstalled.addListener(() => {
   maybeRefreshCoinList();
   startBadgeUpdates();
 });
+
+// 每次 SW 启动时都更新 badge（包括从休眠唤醒后）
+startBadgeUpdates();
