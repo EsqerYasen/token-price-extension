@@ -2,6 +2,20 @@
 
 适用于 Edge 和 Chrome 的浏览器扩展，用于跟踪主流加密货币价格与 24 小时涨跌幅，支持多数据源和自定义关注列表。
 
+## 界面预览
+
+### 主弹窗 – 价格列表与关注
+
+![主弹窗](images/main.png)
+
+### 数据源切换
+
+![数据源](images/source.png)
+
+### 添加 Token – 搜索并添加币种
+
+![添加 Token](images/add-token.png)
+
 ## 功能
 
 ### 图标 Badge（未打开弹窗时）

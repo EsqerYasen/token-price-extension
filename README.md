@@ -2,6 +2,20 @@
 
 A browser extension for Edge and Chrome to track mainstream cryptocurrency prices and 24-hour changes. Supports multiple API sources and customizable watchlists.
 
+## Preview
+
+### Main popup – price list and watchlist
+
+![Main popup](images/main.png)
+
+### Data source selector
+
+![Data source](images/source.png)
+
+### Add token – search and add coins
+
+![Add token](images/add-token.png)
+
 ## Features
 
 ### Badge (when popup is closed)
