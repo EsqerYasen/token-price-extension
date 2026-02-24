@@ -52,11 +52,12 @@ async function maybeRefreshCoinList() {
 function formatBadge(price) {
   if (price == null || isNaN(price)) return '';
   const n = Number(price);
-  if (n >= 10000) return `${Math.round(n / 1000)}k`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`.slice(0, 4);
-  if (n >= 1) return n.toFixed(1).slice(0, 4);
-  if (n >= 0.01) return n.toFixed(2).slice(0, 4);
-  return n.toFixed(3).slice(0, 4);
+  if (n >= 100000) return `${Math.round(n / 1000)}k`;
+  if (n >= 10000) return `${(n / 1000).toFixed(2)}k`;
+  if (n >= 1000) return `${(n / 1000).toFixed(2)}k`;
+  if (n >= 1) return n.toFixed(1);
+  if (n >= 0.01) return n.toFixed(2);
+  return n.toFixed(3);
 }
 
 async function updateBadge() {
